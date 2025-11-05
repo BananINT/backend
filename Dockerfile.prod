@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 COPY . .
 
+VOLUME ["/app/data"]
+
 EXPOSE 3000
 
-CMD [ "fastapi", "run", "src/main.py", "--host", "0.0.0.0", "--port", "3000", "--proxy-headers"]
+CMD ["fastapi", "dev", "src/main.py", "--host", "0.0.0.0", "--port", "3000", "--proxy-headers"]
