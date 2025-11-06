@@ -260,6 +260,61 @@ def calculate_time_based_earnings(
     
     return game_state.bananasPerSecond * time_diff_seconds
 
+def calculate_total_spent_on_upgrades(upgrades: Dict[str, UpgradeType]) -> int:
+    """
+    Calculate how many bananas were spent buying all current upgrades.
+    This is used to verify the player's banana count is legitimate.
+    """
+    total_spent = 0
+    for upgrade in upgrades.values():
+        if upgrade.owned > 0:
+            # Calculate the sum of costs for all owned upgrades
+            # Cost formula: baseCost * 1.15^n for each purchase
+            for n in range(upgrade.owned):
+                cost = math.floor(upgrade.baseCost * math.pow(1.15, n))
+                total_spent += cost
+    return total_spent
+
+def validate_game_state(game_state: GameState, upgrades: Dict[str, UpgradeType]) -> tuple[bool, str]:
+    """
+    Validate that the game state is mathematically possible.
+    Returns (is_valid, error_message)
+    """
+    # Calculate maximum possible bananas from clicks
+    max_from_clicks = game_state.totalClicks * game_state.bananasPerClick
+    
+    # Calculate maximum possible bananas from time-based generation
+    current_time = time.time() * 1000
+    time_diff_seconds = (current_time - game_state.lastSyncTime) / 1000
+    max_offline_seconds = 8 * 60 * 60  # 8 hours max
+    time_diff_seconds = min(time_diff_seconds, max_offline_seconds)
+    max_from_time = game_state.bananasPerSecond * time_diff_seconds
+    
+    # Calculate how much was spent on upgrades
+    total_spent = calculate_total_spent_on_upgrades(upgrades)
+    
+    # Maximum possible bananas = earnings - spending
+    max_possible = max_from_clicks + max_from_time
+    current_with_spending = game_state.bananas + total_spent
+    
+    # Allow 10% tolerance for timing issues and rounding
+    tolerance = max_possible * 0.1
+    
+    if current_with_spending > max_possible + tolerance:
+        return False, f"Impossible banana count. Max possible: {int(max_possible)}, Current (with spending): {int(current_with_spending)}"
+    
+    # Validate bananasPerClick matches upgrades
+    expected_per_click = calculate_bananas_per_click(upgrades)
+    if game_state.bananasPerClick != expected_per_click:
+        return False, f"Invalid bananasPerClick. Expected: {expected_per_click}, Got: {game_state.bananasPerClick}"
+    
+    # Validate bananasPerSecond matches upgrades
+    expected_per_second = calculate_bananas_per_second(upgrades)
+    if abs(game_state.bananasPerSecond - expected_per_second) > 0.1:
+        return False, f"Invalid bananasPerSecond. Expected: {expected_per_second}, Got: {game_state.bananasPerSecond}"
+    
+    return True, ""
+
 def calculate_expected_bananas(game_state: GameState, upgrades: Dict[str, UpgradeType]) -> float:
     """
     Calculate what the player's banana count SHOULD be based on:
@@ -312,6 +367,7 @@ async def sync_game(request: SyncRequest):
     """
     Sync game state with server
     Handles batched clicks and time-based auto-generation
+    Server validates all values to prevent cheating
     """
     if request.sessionId not in game_sessions:
         return SyncResponse(
@@ -324,10 +380,19 @@ async def sync_game(request: SyncRequest):
     upgrades = upgrades_data[request.sessionId]
     current_time = time.time() * 1000
     
+    # ANTI-CHEAT: Validate clicks are reasonable (max 20/sec = 100ms between clicks)
+    time_since_last_sync = (current_time - game_state.lastSyncTime) / 1000  # seconds
+    max_possible_clicks = math.ceil(time_since_last_sync * 20)  # 20 clicks per second max
+    
+    if request.pendingClicks > max_possible_clicks:
+        print(f"⚠️ Too many clicks from {request.sessionId}: {request.pendingClicks} in {time_since_last_sync:.2f}s")
+        # Cap to maximum possible
+        request.pendingClicks = max_possible_clicks
+    
     # Calculate time-based earnings
     time_earnings = calculate_time_based_earnings(game_state, upgrades, current_time)
     
-    # Calculate click earnings
+    # Calculate click earnings (server-side calculation)
     click_earnings = request.pendingClicks * game_state.bananasPerClick
     
     # Update game state
@@ -335,7 +400,8 @@ async def sync_game(request: SyncRequest):
     game_state.totalClicks += request.pendingClicks
     game_state.lastSyncTime = current_time
     
-    # Recalculate bananasPerSecond in case it changed
+    # Recalculate stats (server is authority)
+    game_state.bananasPerClick = calculate_bananas_per_click(upgrades)
     game_state.bananasPerSecond = calculate_bananas_per_second(upgrades)
     
     # Save after every sync
@@ -348,7 +414,7 @@ async def sync_game(request: SyncRequest):
 
 @app.post("/game/upgrade", response_model=UpgradeResponse)
 async def buy_upgrade(request: UpgradeRequest):
-    """Purchase an upgrade"""
+    """Purchase an upgrade - fully server-side validated"""
     if request.sessionId not in game_sessions:
         return UpgradeResponse(
             success=False,
@@ -371,7 +437,9 @@ async def buy_upgrade(request: UpgradeRequest):
     upgrade = upgrades[request.upgradeId]
     cost = calculate_upgrade_cost(upgrade)
     
+    # Server-side validation of banana count
     if game_state.bananas < cost:
+        print(f"⚠️ Insufficient funds for {request.sessionId}: has {game_state.bananas}, needs {cost}")
         return UpgradeResponse(
             success=False,
             gameState=game_state,
@@ -383,9 +451,11 @@ async def buy_upgrade(request: UpgradeRequest):
     game_state.bananas -= cost
     upgrade.owned += 1
     
-    # Recalculate stats
+    # Recalculate stats (server calculates, client just displays)
     game_state.bananasPerClick = calculate_bananas_per_click(upgrades)
     game_state.bananasPerSecond = calculate_bananas_per_second(upgrades)
+    
+    print(f"✅ Upgrade purchased: {upgrade.name} (#{upgrade.owned}) by {request.sessionId}")
     
     save_data()
     return UpgradeResponse(
@@ -397,7 +467,7 @@ async def buy_upgrade(request: UpgradeRequest):
 @app.post("/game/submit-score", response_model=SubmitScoreResponse)
 async def submit_score(request: SubmitScoreRequest):
     """
-    Submit a score to the leaderboard with server-side verification
+    Submit a score to the leaderboard with comprehensive server-side verification
     """
     if not request.name.strip():
         return SubmitScoreResponse(
@@ -417,29 +487,39 @@ async def submit_score(request: SubmitScoreRequest):
     game_state = game_sessions[request.sessionId]
     upgrades = upgrades_data[request.sessionId]
     
-    # Calculate what the score SHOULD be based on server state
+    # ANTI-CHEAT STEP 1: Validate entire game state is mathematically possible
+    is_valid, error_msg = validate_game_state(game_state, upgrades)
+    if not is_valid:
+        print(f"⚠️ Game state validation failed for {request.sessionId}: {error_msg}")
+        return SubmitScoreResponse(
+            success=False,
+            leaderboard=sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10],
+            message="Invalid game state detected"
+        )
+    
+    # ANTI-CHEAT STEP 2: Calculate what the score SHOULD be based on server state
     expected_score = calculate_expected_bananas(game_state, upgrades)
     submitted_score = request.score
     
-    # Allow some tolerance for client-side rounding and timing differences (5% tolerance)
-    tolerance = expected_score * 0.05
+    # Allow 5% tolerance for timing differences
+    tolerance = max(expected_score * 0.05, 10)  # At least 10 banana tolerance
     score_difference = abs(submitted_score - expected_score)
     
     if score_difference > tolerance:
-        # Score doesn't match server state - possible cheating
-        print(f"⚠️ Score verification failed for session {request.sessionId}")
+        print(f"⚠️ Score mismatch for {request.sessionId}")
         print(f"   Expected: {expected_score:.2f}, Submitted: {submitted_score}, Diff: {score_difference:.2f}")
         
         return SubmitScoreResponse(
             success=False,
             leaderboard=sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10],
-            message=f"Score verification failed. Expected around {int(expected_score)}, got {submitted_score}"
+            message="Score verification failed"
         )
     
     # Score is valid - use server's authoritative value
     verified_score = int(expected_score)
     
     print(f"✅ Score verified for {request.name}: {verified_score} bananas")
+    print(f"   Total clicks: {game_state.totalClicks}, Per click: {game_state.bananasPerClick}, Per second: {game_state.bananasPerSecond}")
     
     # Add new entry with verified score
     new_entry = LeaderboardEntry(
@@ -491,7 +571,7 @@ async def get_leaderboard():
 
 @app.get("/")
 async def root():
-    return {"message": "Banana Clicker API - Optimized Version with Score Verification"}
+    return {"message": "Banana Clicker API - Fully Server-Validated"}
 
 @app.get("/health")
 async def health_check():
@@ -499,7 +579,7 @@ async def health_check():
         "status": "healthy",
         "sessions": len(game_sessions),
         "leaderboard_entries": len(leaderboard_data),
-        "total_bananas_farmed": sum(gs.bananas for gs in game_sessions.values())
+        "total_bananas_farmed": int(sum(gs.bananas for gs in game_sessions.values()))
     }
 
 if __name__ == "__main__":
