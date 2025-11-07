@@ -84,7 +84,6 @@ class UpgradeResponse(BaseModel):
 class SubmitScoreRequest(BaseModel):
     sessionId: str
     name: str
-    score: int
 
 class SubmitScoreResponse(BaseModel):
     success: bool
@@ -540,8 +539,9 @@ async def buy_upgrade(request: UpgradeRequest):
 async def submit_score(request: SubmitScoreRequest):
     """
     Submit or update player name for leaderboard.
-    The score is automatically updated on each sync, so this mainly sets the name.
-    If submitted score exceeds maximum possible, it's capped to the calculated maximum.
+    The score is determined from the server-side game state (game_state.bananas),
+    ignoring any client-submitted score.
+    If bananas exceed the maximum possible, they're capped to that value.
     """
     trimmed_name = request.name.strip()
     if not trimmed_name:
@@ -551,7 +551,7 @@ async def submit_score(request: SubmitScoreRequest):
             leaderboard=get_leaderboard(),
             message="Player name cannot be empty"
         )
-    
+
     # Verify session exists
     if request.sessionId not in game_sessions:
         print(f"❌ Invalid session ID for score submission: {request.sessionId}")
@@ -560,42 +560,40 @@ async def submit_score(request: SubmitScoreRequest):
             leaderboard=get_leaderboard(),
             message="Invalid session - please refresh the page"
         )
-    
+
     # Reload latest data
     load_data()
-    
+
     game_state = game_sessions[request.sessionId]
     upgrades = upgrades_data[request.sessionId]
-    
+
     # Calculate maximum possible score for this session
     max_possible_score = calculate_maximum_possible_bananas(game_state, upgrades)
-    submitted_score = request.score
-    
-    # Determine the score to use
-    if submitted_score > max_possible_score:
+    server_score = int(game_state.bananas)
+
+    # Cap score if it exceeds theoretical maximum
+    if server_score > max_possible_score:
         print(f"⚠️ Score exceeds maximum possible for {request.sessionId}:")
-        print(f"   Submitted: {submitted_score}")
+        print(f"   Server bananas: {server_score}")
         print(f"   Maximum possible: {max_possible_score}")
         print(f"   Total clicks: {game_state.totalClicks}")
         print(f"   Per click: {game_state.bananasPerClick}")
         print(f"   Per second: {game_state.bananasPerSecond}")
         print(f"   Using maximum possible value instead")
-        
-        # Use the maximum possible instead of rejecting
+
         final_score = max_possible_score
         message = f"Score capped to maximum possible: {final_score:,} bananas"
     else:
-        # Score is valid
-        final_score = submitted_score
+        final_score = server_score
         message = f"Score submitted: {final_score:,} bananas"
-    
+
     # Update player name in session
     game_state.playerName = trimmed_name
-    
+
     # Update leaderboard
     print(f"✅ Updating leaderboard for {trimmed_name}: {final_score} bananas")
     updated_leaderboard = update_leaderboard(request.sessionId, trimmed_name, final_score)
-    
+
     return SubmitScoreResponse(
         success=True,
         leaderboard=updated_leaderboard,
