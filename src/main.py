@@ -565,27 +565,30 @@ async def submit_score(request: SubmitScoreRequest):
     load_data()
 
     game_state = game_sessions[request.sessionId]
-    upgrades = upgrades_data[request.sessionId]
-
-    # Calculate maximum possible score for this session
-    max_possible_score = calculate_maximum_possible_bananas(game_state, upgrades)
     server_score = int(game_state.bananas)
 
-    # Cap score if it exceeds theoretical maximum
-    if server_score > max_possible_score:
-        print(f"⚠️ Score exceeds maximum possible for {request.sessionId}:")
-        print(f"   Server bananas: {server_score}")
-        print(f"   Maximum possible: {max_possible_score}")
-        print(f"   Total clicks: {game_state.totalClicks}")
-        print(f"   Per click: {game_state.bananasPerClick}")
-        print(f"   Per second: {game_state.bananasPerSecond}")
-        print(f"   Using maximum possible value instead")
+    # # Calculate maximum possible score for this session
+    # upgrades = upgrades_data[request.sessionId]
+    # max_possible_score = calculate_maximum_possible_bananas(game_state, upgrades)
 
-        final_score = max_possible_score
-        message = f"Score capped to maximum possible: {final_score:,} bananas"
-    else:
-        final_score = server_score
-        message = f"Score submitted: {final_score:,} bananas"
+    # # Cap score if it exceeds theoretical maximum
+    # if server_score > max_possible_score:
+    #     print(f"⚠️ Score exceeds maximum possible for {request.sessionId}:")
+    #     print(f"   Server bananas: {server_score}")
+    #     print(f"   Maximum possible: {max_possible_score}")
+    #     print(f"   Total clicks: {game_state.totalClicks}")
+    #     print(f"   Per click: {game_state.bananasPerClick}")
+    #     print(f"   Per second: {game_state.bananasPerSecond}")
+    #     print(f"   Using maximum possible value instead")
+
+    #     final_score = max_possible_score
+    #     message = f"Score capped to maximum possible: {final_score:,} bananas"
+    # else:
+    #     final_score = server_score
+    #     message = f"Score submitted: {final_score:,} bananas"
+
+    final_score = server_score
+    message = f"Score submitted: {final_score:,} bananas"
 
     # Update player name in session
     game_state.playerName = trimmed_name
