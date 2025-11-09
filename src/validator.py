@@ -104,7 +104,7 @@ class ValidationReport:
 class GameStateValidator:
     """Validates game states and provides detailed debugging information"""
     
-    def __init__(self, save_file: str = "/app/data/bananint_data.json"):
+    def __init__(self, save_file: str = "/usr/share/nginx/BananINT/data/bananint_data.json"):
         self.save_file = save_file
         self.data = None
         self.load_data()

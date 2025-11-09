@@ -313,24 +313,17 @@ def calculate_maximum_possible_bananas(game_state: GameState, upgrades: Dict[str
     
     return max(0, max_possible)  # Can't be negative
 
-def update_leaderboard(session_id: str, player_name: str, score: int) -> List[LeaderboardEntry]:
+def update_leaderboard(session_id: str, player_name: str, score: int) -> List[dict]:
     """
     Update or add a player's score to the leaderboard.
     If the session already has an entry, update it. Otherwise, create new.
-    Returns the updated top 10 leaderboard.
+    Returns the updated top 10 leaderboard (without session IDs).
     """
-    # Reload data from disk to get latest state
     load_data()
-    
-    # Find existing entry for this session
-    existing_entry = None
-    for entry in leaderboard_data:
-        if entry.sessionId == session_id:
-            existing_entry = entry
-            break
-    
+
+    existing_entry = next((e for e in leaderboard_data if e.sessionId == session_id), None)
+
     if existing_entry:
-        # Update existing entry only if score is higher
         if score > existing_entry.score:
             print(f"📈 Updating score for {player_name}: {existing_entry.score} → {score}")
             existing_entry.score = score
@@ -339,26 +332,29 @@ def update_leaderboard(session_id: str, player_name: str, score: int) -> List[Le
         else:
             print(f"⏸️  Score {score} not higher than existing {existing_entry.score}, keeping old score")
     else:
-        # Create new entry
         print(f"🆕 New leaderboard entry: {player_name} with {score} bananas")
-        new_entry = LeaderboardEntry(
-            name=player_name[:20],
-            score=score,
-            date=datetime.utcnow().isoformat(),
-            sessionId=session_id
+        leaderboard_data.append(
+            LeaderboardEntry(
+                name=player_name[:20],
+                score=score,
+                date=datetime.utcnow().isoformat(),
+                sessionId=session_id,
+            )
         )
-        leaderboard_data.append(new_entry)
-    
-    # Sort and keep top 10
-    sorted_leaderboard = sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
-    
-    # Update global leaderboard
-    leaderboard_data.clear()
-    leaderboard_data.extend(sorted_leaderboard)
-    
+
+    # Keep top 10
+    leaderboard_data[:] = sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
     save_data()
-    
-    return sorted_leaderboard
+
+    # Sanitize output: remove sessionId before returning
+    return [
+        {
+            "name": e.name,
+            "score": e.score,
+            "date": e.date,
+        }
+        for e in leaderboard_data
+    ]
 
 def get_leaderboard() -> List[LeaderboardEntry]:
     """Get current top 10 leaderboard"""
@@ -566,27 +562,7 @@ async def submit_score(request: SubmitScoreRequest):
 
     game_state = game_sessions[request.sessionId]
     server_score = int(game_state.bananas)
-
-    # # Calculate maximum possible score for this session
-    # upgrades = upgrades_data[request.sessionId]
-    # max_possible_score = calculate_maximum_possible_bananas(game_state, upgrades)
-
-    # # Cap score if it exceeds theoretical maximum
-    # if server_score > max_possible_score:
-    #     print(f"⚠️ Score exceeds maximum possible for {request.sessionId}:")
-    #     print(f"   Server bananas: {server_score}")
-    #     print(f"   Maximum possible: {max_possible_score}")
-    #     print(f"   Total clicks: {game_state.totalClicks}")
-    #     print(f"   Per click: {game_state.bananasPerClick}")
-    #     print(f"   Per second: {game_state.bananasPerSecond}")
-    #     print(f"   Using maximum possible value instead")
-
-    #     final_score = max_possible_score
-    #     message = f"Score capped to maximum possible: {final_score:,} bananas"
-    # else:
-    #     final_score = server_score
-    #     message = f"Score submitted: {final_score:,} bananas"
-
+    
     final_score = server_score
     message = f"Score submitted: {final_score:,} bananas"
 
