@@ -32,7 +32,7 @@ class GameState(BaseModel):
     bananasPerSecond: float
     totalClicks: int
     lastSyncTime: float
-    playerName: Optional[str] = ""  # Track player name with session
+    playerName: Optional[str] = ""
 
 class UpgradeType(BaseModel):
     id: str
@@ -46,7 +46,13 @@ class LeaderboardEntry(BaseModel):
     name: str
     score: int
     date: str
-    sessionId: str  # Track which session this score belongs to
+    sessionId: str  # Keep internally but never expose in responses
+
+class PublicLeaderboardEntry(BaseModel):
+    """Public leaderboard entry without sessionId"""
+    name: str
+    score: int
+    date: str
 
 class InitRequest(BaseModel):
     sessionId: Optional[str] = None
@@ -55,7 +61,7 @@ class InitResponse(BaseModel):
     sessionId: str
     gameState: GameState
     upgrades: List[UpgradeType]
-    leaderboard: List[LeaderboardEntry]
+    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
     playerName: str
 
 class SyncRequest(BaseModel):
@@ -67,7 +73,7 @@ class SyncRequest(BaseModel):
 class SyncResponse(BaseModel):
     success: bool
     gameState: GameState
-    leaderboard: List[LeaderboardEntry]  # Return updated leaderboard on each sync
+    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
     message: Optional[str] = None
 
 class UpgradeRequest(BaseModel):
@@ -78,7 +84,7 @@ class UpgradeResponse(BaseModel):
     success: bool
     gameState: GameState
     upgrades: List[UpgradeType]
-    leaderboard: List[LeaderboardEntry]  # Return updated leaderboard
+    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
     message: Optional[str] = None
 
 class SubmitScoreRequest(BaseModel):
@@ -87,7 +93,7 @@ class SubmitScoreRequest(BaseModel):
 
 class SubmitScoreResponse(BaseModel):
     success: bool
-    leaderboard: List[LeaderboardEntry]
+    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
     message: Optional[str] = None
 
 class ResetRequest(BaseModel):
@@ -290,34 +296,21 @@ def calculate_total_spent_on_upgrades(upgrades: Dict[str, UpgradeType]) -> int:
                 total_spent += cost
     return total_spent
 
-def calculate_maximum_possible_bananas(game_state: GameState, upgrades: Dict[str, UpgradeType]) -> int:
-    """
-    Calculate the MAXIMUM theoretically possible bananas this session could have earned.
-    This is used to cap submitted scores if they exceed realistic values.
-    """
-    # Maximum from all clicks ever made
-    max_from_clicks = game_state.totalClicks * game_state.bananasPerClick
-    
-    # Maximum from time-based generation (since session creation)
-    current_time = time.time() * 1000
-    session_age_seconds = (current_time - game_state.lastSyncTime) / 1000
-    max_offline_seconds = 8 * 60 * 60  # 8 hours max
-    time_for_generation = min(session_age_seconds, max_offline_seconds)
-    max_from_time = game_state.bananasPerSecond * time_for_generation
-    
-    # Calculate spending
-    total_spent = calculate_total_spent_on_upgrades(upgrades)
-    
-    # Maximum possible = earnings - spending
-    max_possible = int(max_from_clicks + max_from_time - total_spent)
-    
-    return max(0, max_possible)  # Can't be negative
+def sanitize_leaderboard(entries: List[LeaderboardEntry]) -> List[PublicLeaderboardEntry]:
+    """Remove sessionId from leaderboard entries before sending to clients"""
+    return [
+        PublicLeaderboardEntry(
+            name=entry.name,
+            score=entry.score,
+            date=entry.date
+        )
+        for entry in entries
+    ]
 
-def update_leaderboard(session_id: str, player_name: str, score: int) -> List[dict]:
+def update_leaderboard(session_id: str, player_name: str, score: int) -> List[PublicLeaderboardEntry]:
     """
     Update or add a player's score to the leaderboard.
-    If the session already has an entry, update it. Otherwise, create new.
-    Returns the updated top 10 leaderboard (without session IDs).
+    Returns sanitized leaderboard without sessionIds.
     """
     load_data()
 
@@ -346,19 +339,13 @@ def update_leaderboard(session_id: str, player_name: str, score: int) -> List[di
     leaderboard_data[:] = sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
     save_data()
 
-    # Sanitize output: remove sessionId before returning
-    return [
-        {
-            "name": e.name,
-            "score": e.score,
-            "date": e.date,
-        }
-        for e in leaderboard_data
-    ]
+    # Return sanitized leaderboard
+    return sanitize_leaderboard(leaderboard_data)
 
-def get_leaderboard() -> List[LeaderboardEntry]:
-    """Get current top 10 leaderboard"""
-    return sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
+def get_leaderboard() -> List[PublicLeaderboardEntry]:
+    """Get current top 10 leaderboard (sanitized, no sessionIds)"""
+    top_entries = sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
+    return sanitize_leaderboard(top_entries)
 
 def get_or_create_session(session_id: Optional[str]) -> tuple[str, GameState, Dict[str, UpgradeType]]:
     if session_id and session_id in game_sessions:
@@ -397,10 +384,7 @@ async def init_game(request: InitRequest):
 
 @app.post("/game/sync", response_model=SyncResponse)
 async def sync_game(request: SyncRequest):
-    """
-    Sync game state with server.
-    Now automatically updates leaderboard if player has a name set.
-    """
+    """Sync game state with server"""
     if request.sessionId not in game_sessions:
         print(f"❌ Invalid session ID: {request.sessionId}")
         return SyncResponse(
@@ -533,12 +517,7 @@ async def buy_upgrade(request: UpgradeRequest):
 
 @app.post("/game/submit-score", response_model=SubmitScoreResponse)
 async def submit_score(request: SubmitScoreRequest):
-    """
-    Submit or update player name for leaderboard.
-    The score is determined from the server-side game state (game_state.bananas),
-    ignoring any client-submitted score.
-    If bananas exceed the maximum possible, they're capped to that value.
-    """
+    """Submit or update player name for leaderboard"""
     trimmed_name = request.name.strip()
     if not trimmed_name:
         print(f"❌ Empty name submitted from {request.sessionId}")
@@ -601,9 +580,9 @@ async def reset_game(request: ResetRequest):
         upgrades=list(initial_upgrades.values())
     )
 
-@app.get("/game/leaderboard", response_model=List[LeaderboardEntry])
+@app.get("/game/leaderboard", response_model=List[PublicLeaderboardEntry])
 async def get_leaderboard_endpoint():
-    """Get the current leaderboard"""
+    """Get the current leaderboard (without sessionIds)"""
     return get_leaderboard()
 
 @app.get("/")
