@@ -362,7 +362,6 @@ def update_leaderboard(session_id: str, player_name: str, score: int) -> List[Pu
 
     # Keep top 10
     leaderboard_data[:] = sorted(leaderboard_data, key=lambda x: x.score, reverse=True)[:10]
-    save_data()
 
     # Return sanitized leaderboard
     return sanitize_leaderboard(leaderboard_data)
@@ -400,6 +399,8 @@ async def init_game(request: InitRequest):
         game_state.bananas += time_earnings
         game_state.lastSyncTime = current_time
     
+    save_data()
+
     return InitResponse(
         sessionId=session_id,
         gameState=game_state,
@@ -577,6 +578,8 @@ async def submit_score(request: SubmitScoreRequest):
     # Update leaderboard
     print(f"✅ Updating leaderboard for {trimmed_name}: {final_score} bananas")
     updated_leaderboard = update_leaderboard(request.sessionId, trimmed_name, final_score)
+
+    save_data()
 
     return SubmitScoreResponse(
         success=True,
