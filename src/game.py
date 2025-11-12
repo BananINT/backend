@@ -391,6 +391,12 @@ async def init_game(request: InitRequest):
     session_id, game_state, upgrades = get_or_create_session(request.sessionId)
     print("ℹ️ Session init", session_id)
     
+    # Merge in any new upgrades that were added to DEFAULT_UPGRADES
+    for upgrade_data in DEFAULT_UPGRADES:
+        if upgrade_data["id"] not in upgrades:
+            print(f"🆕 Adding new upgrade to existing session: {upgrade_data['name']}")
+            upgrades[upgrade_data["id"]] = UpgradeType(**upgrade_data)
+    
     # Calculate any time-based earnings
     current_time = time.time() * 1000
     time_earnings = calculate_time_based_earnings(game_state, upgrades, current_time)
