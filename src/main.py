@@ -16,7 +16,7 @@ app.add_middleware(
 
 # Register both apps
 app.include_router(game_router, prefix="/game")
-# app.include_router(enhanced_game_router, prefix="/enhanced-game")
+app.include_router(enhanced_game_router, prefix="/enhanced-game")
 
 @app.get("/")
 async def root():

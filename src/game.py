@@ -52,8 +52,9 @@ class InitResponse(BaseModel):
     sessionId: str
     gameState: GameState
     upgrades: List[UpgradeType]
-    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
+    leaderboard: List[PublicLeaderboardEntry]
     playerName: str
+    offlineEarnings: float
 
 class SyncRequest(BaseModel):
     sessionId: str
@@ -64,7 +65,7 @@ class SyncRequest(BaseModel):
 class SyncResponse(BaseModel):
     success: bool
     gameState: GameState
-    leaderboard: List[PublicLeaderboardEntry]  # Changed to public version
+    leaderboard: List[PublicLeaderboardEntry]
     message: Optional[str] = None
 
 class UpgradeRequest(BaseModel):
@@ -115,7 +116,7 @@ DEFAULT_UPGRADES = [
     },
     {
         "id": "click_4",
-        "name": "Banana Peeler",
+        "name": "Banana Laser Gloves",
         "baseCost": 10000,
         "multiplier": 25,
         "type": "click",
@@ -345,7 +346,7 @@ def update_leaderboard(session_id: str, player_name: str, score: int) -> List[Pu
         if score > existing_entry.score:
             print(f"📈 Updating score for {player_name}: {existing_entry.score} → {score}")
             existing_entry.score = score
-            existing_entry.name = player_name
+            existing_entry.name = player_name[:20]
             existing_entry.date = date
         else:
             print(f"⏸️  Score {score} not higher than existing {existing_entry.score}, keeping old score")
@@ -412,7 +413,8 @@ async def init_game(request: InitRequest):
         gameState=game_state,
         upgrades=list(upgrades.values()),
         leaderboard=get_leaderboard(),
-        playerName=game_state.playerName or ""
+        playerName=game_state.playerName or "",
+        offlineEarnings=time_earnings
     )
 
 @router.post("/sync", response_model=SyncResponse)
@@ -433,7 +435,7 @@ async def sync_game(request: SyncRequest):
     
     # ANTI-CHEAT: Validate clicks are reasonable (max 20/sec)
     time_since_last_sync = (current_time - game_state.lastSyncTime) / 1000
-    max_possible_clicks = math.ceil(time_since_last_sync * 20)
+    max_possible_clicks = math.floor(time_since_last_sync * 20)
     
     actual_clicks = request.pendingClicks
     if request.pendingClicks > max_possible_clicks:
